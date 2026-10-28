@@ -83,6 +83,12 @@ describe("StdinBuffer", () => {
 			processInput(ss3);
 			assert.deepStrictEqual(emittedSequences, [ss3]);
 		});
+
+		it("should emit focus reports as whole sequences in order", () => {
+			processInput("\x1b[");
+			processInput("Oa\x1b[I");
+			assert.deepStrictEqual(emittedSequences, ["\x1b[O", "a", "\x1b[I"]);
+		});
 	});
 
 	describe("Partial Escape Sequences", () => {
@@ -628,6 +634,13 @@ describe("StdinBuffer", () => {
 			processInput("\x1b[200~Hello 世界 🎉\x1b[201~");
 
 			assert.deepStrictEqual(emittedPaste, ["Hello 世界 🎉"]);
+			assert.deepStrictEqual(emittedSequences, []);
+		});
+
+		it("should keep focus reports inside a paste as paste content", () => {
+			processInput("\x1b[200~\x1b[O\x1b[201~");
+
+			assert.deepStrictEqual(emittedPaste, ["\x1b[O"]);
 			assert.deepStrictEqual(emittedSequences, []);
 		});
 	});

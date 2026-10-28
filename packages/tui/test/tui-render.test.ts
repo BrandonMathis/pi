@@ -15,6 +15,7 @@ import {
 	setCellDimensions,
 } from "../src/terminal-image.ts";
 import { type Component, CURSOR_MARKER, renderFakeCursor, type TUI } from "../src/tui.ts";
+import { TuiAltScreen } from "../src/tui-alt-screen.ts";
 import { TuiMainScreen } from "../src/tui-main-screen.ts";
 import { sliceByColumn } from "../src/utils.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
@@ -38,6 +39,18 @@ class InputComponent extends TestComponent {
 	handleInput(data: string): void {
 		this.lines = [data];
 	}
+}
+
+class FocusableComponent implements Component {
+	focused = false;
+	inputs: string[] = [];
+	render(): string[] {
+		return [`${this.focused ? CURSOR_MARKER : ""}${renderFakeCursor("a")}bc`];
+	}
+	handleInput(data: string): void {
+		this.inputs.push(data);
+	}
+	invalidate(): void {}
 }
 
 const MAX_RENDER_WRITE_CHARS = 1024 * 1024;
@@ -1020,5 +1033,60 @@ describe("TUI fake cursor", () => {
 			assert.ok(writes.endsWith("\x1b[4G"));
 			tui.stop();
 		}
+	});
+
+	// Regression for #8414: the fake cursor stayed visible in unfocused windows and panes.
+	it("omits the focused fake cursor while the terminal is unfocused", async () => {
+		for (const Tui of [TuiMainScreen, TuiAltScreen]) {
+			const terminal = new LoggingVirtualTerminal(20, 5);
+			const tui: TUI = new Tui(terminal);
+			const component = new FocusableComponent();
+			tui.addChild(component);
+			tui.setFocus(component);
+			tui.start();
+			await terminal.waitForRender();
+			assert.ok(terminal.getWrites().includes("\x1b[?1004h"));
+			assert.ok(terminal.getWrites().includes("\x1b[7ma\x1b[27mbc"));
+
+			terminal.clearWrites();
+			terminal.sendInput("\x1b[O");
+			await terminal.waitForRender();
+			assert.ok(terminal.getWrites().includes("abc"));
+			assert.ok(!terminal.getWrites().includes("\x1b[7m"));
+
+			terminal.clearWrites();
+			terminal.sendInput("\x1b[I");
+			await terminal.waitForRender();
+			assert.ok(terminal.getWrites().includes("\x1b[7ma\x1b[27mbc"));
+			assert.deepStrictEqual(component.inputs, []);
+			assert.ok(component.focused);
+
+			terminal.clearWrites();
+			tui.stop();
+			assert.ok(terminal.getWrites().includes("\x1b[?1004l"));
+		}
+	});
+
+	it("keeps the terminal unfocused across a renderer switch", async () => {
+		const terminal = new LoggingVirtualTerminal(20, 5);
+		const regular: TUI = new TuiMainScreen(terminal);
+		regular.start();
+		terminal.sendInput("\x1b[O");
+		regular.stop({ preserveScreen: true });
+
+		const fullscreen: TUI = new TuiAltScreen(terminal);
+		const component = new FocusableComponent();
+		fullscreen.addChild(component);
+		fullscreen.setFocus(component);
+		terminal.clearWrites();
+		fullscreen.start();
+		await terminal.waitForRender();
+		assert.ok(terminal.getWrites().includes("abc"));
+		assert.ok(!terminal.getWrites().includes("\x1b[7m"));
+
+		terminal.sendInput("\x1b[I");
+		await terminal.waitForRender();
+		assert.ok(terminal.getWrites().includes("\x1b[7ma\x1b[27mbc"));
+		fullscreen.stop();
 	});
 });

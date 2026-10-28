@@ -212,6 +212,13 @@ export function renderFakeCursor(text: string): string {
 	return `${FAKE_CURSOR_START}${text}${FAKE_CURSOR_END}`;
 }
 
+const ENABLE_FOCUS_REPORTING = "\x1b[?1004h";
+const DISABLE_FOCUS_REPORTING = "\x1b[?1004l";
+const FOCUS_IN = "\x1b[I";
+const FOCUS_OUT = "\x1b[O";
+// Mode switches reuse the terminal in a new renderer, so its last reported focus must outlive the renderer.
+const terminalFocusStates = new WeakMap<Terminal, boolean>();
+
 export { visibleWidth };
 
 /**
@@ -523,6 +530,8 @@ export abstract class TuiBase extends Container implements TUI {
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
 	private showHardwareCursor = false;
+	/** Whether the terminal window or pane has keyboard focus. Assumed until the terminal reports otherwise. */
+	private terminalFocused: boolean;
 	private clearOnShrink = false;
 	protected fullRedrawCount = 0;
 	protected stopped = false;
@@ -549,6 +558,7 @@ export abstract class TuiBase extends Container implements TUI {
 	constructor(terminal: Terminal, showHardwareCursor?: boolean, logDirectory?: string) {
 		super();
 		this.terminal = terminal;
+		this.terminalFocused = terminalFocusStates.get(terminal) ?? true;
 		this.logDirectory = logDirectory;
 		if (showHardwareCursor !== undefined) {
 			this.showHardwareCursor = showHardwareCursor;
@@ -569,7 +579,7 @@ export abstract class TuiBase extends Container implements TUI {
 
 	/** Mode resets written before the terminal's own resets when the process exits without stop(). */
 	protected getExitRestorePrefix(): string {
-		return `${this.terminalColorSchemeNotificationsEnabled ? "\x1b[?2031l" : ""}\x1b[?25h`;
+		return `${DISABLE_FOCUS_REPORTING}${this.terminalColorSchemeNotificationsEnabled ? "\x1b[?2031l" : ""}\x1b[?25h`;
 	}
 
 	/** Mode resets written after the terminal's own resets when the process exits without stop(). */
@@ -963,6 +973,7 @@ export abstract class TuiBase extends Container implements TUI {
 			() => this.requestRender(),
 		);
 		this.afterTerminalStart();
+		this.terminal.write(ENABLE_FOCUS_REPORTING);
 		this.terminal.hideCursor();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
@@ -1017,6 +1028,7 @@ export abstract class TuiBase extends Container implements TUI {
 			this.terminal.write("\x1b[?2031l");
 		}
 		this.beforeTerminalStop(options);
+		this.terminal.write(DISABLE_FOCUS_REPORTING);
 		this.terminal.showCursor();
 		this.terminal.stop();
 		this.afterTerminalStop(options);
@@ -1092,6 +1104,14 @@ export abstract class TuiBase extends Container implements TUI {
 			return;
 		}
 
+		// Update focus before the listeners run: fullscreen consumes focus reports for its own cleanup.
+		const isFocusReport = data === FOCUS_IN || data === FOCUS_OUT;
+		if (isFocusReport && this.terminalFocused !== (data === FOCUS_IN)) {
+			this.terminalFocused = data === FOCUS_IN;
+			terminalFocusStates.set(this.terminal, this.terminalFocused);
+			this.requestRender();
+		}
+
 		if (this.inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.inputListeners) {
@@ -1107,6 +1127,9 @@ export abstract class TuiBase extends Container implements TUI {
 				return;
 			}
 			data = current;
+		}
+		if (isFocusReport) {
+			return;
 		}
 
 		// Consume terminal cell size responses without blocking unrelated input.
@@ -1503,14 +1526,16 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	/**
-	 * Resolve fake cursor markers to reverse video. When the hardware cursor is shown, a fake cursor
-	 * directly after CURSOR_MARKER is dropped because the terminal cursor is drawn there. Fake cursors
-	 * of components without focus have no CURSOR_MARKER and stay visible.
+	 * Resolve fake cursor markers to reverse video. A fake cursor directly after CURSOR_MARKER is dropped
+	 * when the hardware cursor is shown, because the terminal cursor is drawn there, and when the terminal
+	 * lost focus, so only the focused window or pane shows a cursor. Fake cursors of components without
+	 * focus have no CURSOR_MARKER and stay visible.
 	 */
 	protected resolveFakeCursors(lines: string[]): string[] {
 		return lines.map((line) => {
 			if (!line.includes(FAKE_CURSOR_START)) return line;
-			const resolved = this.showHardwareCursor ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;
+			const resolved =
+				this.showHardwareCursor || !this.terminalFocused ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;
 			return resolved.replaceAll(FAKE_CURSOR_START, "\x1b[7m").replaceAll(FAKE_CURSOR_END, "\x1b[27m");
 		});
 	}

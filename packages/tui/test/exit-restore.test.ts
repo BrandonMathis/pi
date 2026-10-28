@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const fixture = fileURLToPath(new URL("./fixtures/exit-without-stop.ts", import.meta.url));
 
-function runFixture(mode: "exit" | "stop"): string {
-	const result = spawnSync(process.execPath, [fixture, mode], {
+function runFixture(mode: "exit" | "stop", renderer: "fullscreen" | "regular" = "fullscreen"): string {
+	const result = spawnSync(process.execPath, [fixture, mode, renderer], {
 		encoding: "utf8",
 		env: { ...process.env, TMUX: undefined, STY: undefined, ZELLIJ: undefined, TERM: "xterm-256color" },
 		stdio: ["pipe", "pipe", "pipe"],
@@ -30,6 +30,10 @@ describe("terminal restore on process exit", () => {
 		}
 		assert.ok(output.indexOf("\x1b[<u") < output.indexOf("\x1b[?1049l"), "Kitty pop must precede leaving alt screen");
 		assert.ok(output.endsWith("\x1b[?1049l\x1b[?25h"));
+	});
+
+	it("restores focus reporting when the regular renderer exits without stop()", () => {
+		assert.equal(count(runFixture("exit", "regular"), "\x1b[?1004l"), 1);
 	});
 
 	it("does not restore twice after a normal stop()", () => {

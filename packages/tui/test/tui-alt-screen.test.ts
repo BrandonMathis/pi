@@ -1684,15 +1684,17 @@ describe("TuiAltScreen", () => {
 		tui.start();
 		await terminal.waitForRender();
 
-		const writeCount = () => terminal.events.filter((event) => event.type === "write").length;
+		// Focus changes always render a frame; only row rewrites count as a repaint.
+		const repaintCount = () =>
+			terminal.events.filter((event) => event.type === "write" && event.data.includes("\x1b[2K")).length;
 		const clipboardWriteCount = () =>
 			terminal.events.filter((event) => event.type === "write" && event.data.includes("\x1b]52;c;")).length;
 
-		const idleWriteCount = writeCount();
+		const idleRepaintCount = repaintCount();
 		terminal.sendInput("\x1b[O");
 		terminal.sendInput("\x1b[I");
 		await terminal.waitForRender();
-		assert.strictEqual(writeCount(), idleWriteCount);
+		assert.strictEqual(repaintCount(), idleRepaintCount);
 
 		// A completed click leaves a zero-width anchor, but later orphaned drag/release events must not extend it.
 		terminal.sendInput("\x1b[<0;1;1M");
@@ -1705,11 +1707,11 @@ describe("TuiAltScreen", () => {
 		// Losing focus after a press without a drag cancels the press without repainting.
 		terminal.sendInput("\x1b[<0;1;3M");
 		await terminal.waitForRender();
-		const pressedWriteCount = writeCount();
+		const pressedRepaintCount = repaintCount();
 		terminal.sendInput("\x1b[O");
 		terminal.sendInput("\x1b[I");
 		await terminal.waitForRender();
-		assert.strictEqual(writeCount(), pressedWriteCount);
+		assert.strictEqual(repaintCount(), pressedRepaintCount);
 		terminal.sendInput("\x1b[<32;4;2M");
 		terminal.sendInput("\x1b[<0;4;2m");
 		await terminal.waitForRender();
@@ -1761,11 +1763,13 @@ describe("TuiAltScreen", () => {
 		terminal.sendInput("\x1b[<32;4;2M");
 		terminal.sendInput("\x1b[<0;4;2m");
 		await terminal.waitForRender();
-		const completedWriteCount = terminal.events.filter((event) => event.type === "write").length;
+		const repaintCount = () =>
+			terminal.events.filter((event) => event.type === "write" && event.data.includes("\x1b[2K")).length;
+		const completedRepaintCount = repaintCount();
 		terminal.sendInput("\x1b[O");
 		terminal.sendInput("\x1b[I");
 		await terminal.waitForRender();
-		assert.strictEqual(terminal.events.filter((event) => event.type === "write").length, completedWriteCount);
+		assert.strictEqual(repaintCount(), completedRepaintCount);
 
 		const redrawEventCount = terminal.events.length;
 		tui.renderNow(true);
